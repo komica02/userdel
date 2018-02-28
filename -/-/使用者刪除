@@ -1,0 +1,65 @@
+/* 使用者刪除 */
+function usrdel(){
+	$PIO = PMCLibrary::getPIOInstance();
+	$FileIO = PMCLibrary::getFileIOInstance();
+	$PMS = PMCLibrary::getPMSInstance();
+
+	// $pwd: 使用者輸入值, $pwdc: Cookie記錄密碼
+	$pwd = isset($_POST['pwd']) ? $_POST['pwd'] : '';
+	$pwdc = isset($_COOKIE['pwdc']) ? $_COOKIE['pwdc'] : '';
+	$onlyimgdel = isset($_POST['onlyimgdel']) ? $_POST['onlyimgdel'] : '';
+	$delno = array();
+	reset($_POST);
+	while ($item = each($_POST)){
+		if ($item[1] !== 'delete') {
+			continue;
+		}
+		if (!is_numeric($item[0])) {
+			continue;
+		}
+		array_push($delno, intval($item[0]));
+	}
+	$haveperm = passwordVerify($pwd) || adminAuthenticate('check');
+	$PMS->useModuleMethods('Authenticate', array($pwd,'userdel',&$haveperm));
+	if($haveperm && isset($_POST['func'])){ // 前端管理功能
+		$message = '';
+		$PMS->useModuleMethods('AdminFunction', array('run', &$delno, $_POST['func'], &$message)); // "AdminFunction" Hook Point
+		if($_POST['func'] != 'delete'){
+			if(isset($_SERVER['HTTP_REFERER'])){
+				header('HTTP/1.1 302 Moved Temporarily');
+				header('Location: '.$_SERVER['HTTP_REFERER']);
+			}
+			exit(); // 僅執行AdminFunction，終止刪除動作
+		}
+	}
+
+	if($pwd=='' && $pwdc!='') $pwd = $pwdc;
+	$pwd_md5 = substr(md5($pwd),2,8);
+	$host = gethostbyaddr(getREMOTE_ADDR());
+	$search_flag = $delflag = false;
+
+	if(!count($delno)) error(_T('del_notchecked'));
+
+	$delposts = array(); // 真正符合刪除條件文章
+	$posts = $PIO->fetchPosts($delno);
+	foreach($posts as $post){
+		if($pwd_md5==$post['pwd'] || $host==$post['host'] || $haveperm){
+			$search_flag = true; // 有搜尋到
+			array_push($delposts, intval($post['no']));
+		}
+	}
+	if($search_flag){
+		if(!$onlyimgdel) $PMS->useModuleMethods('PostOnDeletion', array($delposts, 'frontend')); // "PostOnDeletion" Hook Point
+		$files = $onlyimgdel ? $PIO->removeAttachments($delposts) : $PIO->removePosts($delposts);
+		$FileIO->updateStorageSize(-$FileIO->deleteImage($files)); // 更新容量快取
+		deleteCache($delposts);
+		$PIO->dbCommit();
+	}else error(_T('del_wrongpwornotfound'));
+	if(isset($_POST['func']) && $_POST['func'] == 'delete'){ // 前端管理刪除文章返回管理頁面
+		if(isset($_SERVER['HTTP_REFERER'])){
+			header('HTTP/1.1 302 Moved Temporarily');
+			header('Location: '.$_SERVER['HTTP_REFERER']);
+		}
+		exit();
+	}
+}
